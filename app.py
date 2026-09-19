@@ -18,20 +18,18 @@ timeframe_map = {
 selected_tf_label = st.sidebar.selectbox("टाइमफ्रेम निवडा:", list(timeframe_map.keys()), index=1)
 selected_interval = timeframe_map[selected_tf_label]
 
+# २. निवडक इंडायसेस (NIFTY IT आणि AUTO काढून टाकले आहेत)
 watch_list = {
     "NIFTY 50": "^NSEI",
     "SENSEX": "^BSESN",
     "BANK NIFTY": "^NSEBANK",
     "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
     "NIFTY MIDCAP 50": "^NSEMDCP50",
-    "NIFTY NEXT 50": "^NSENVX",
-    "NIFTY IT": "^CNXIT",
-    "NIFTY AUTO": "^CNXAUTO"
+    "NIFTY NEXT 50": "^NSENVX"
 }
 
-# २. संपूर्ण दिवसाचा डेटा आणि EMA टच तपासणे
+# ३. संपूर्ण दिवसाचा डेटा आणि EMA टच तपासणे
 def scan_full_day_touches(ticker, interval):
-    # 200 EMA च्या अचूकतेसाठी 1 महिन्याचा डेटा लागतो
     period = "5d" if interval == "1m" else "1mo"
     df = yf.download(ticker, period=period, interval=interval, progress=False)
     
@@ -53,10 +51,8 @@ def scan_full_day_touches(ticker, interval):
     df["EMA_50"] = df["Close"].ewm(span=50, adjust=False).mean()
     df["EMA_200"] = df["Close"].ewm(span=200, adjust=False).mean()
 
-    # सर्वात शेवटच्या ट्रेडिंग दिवसाची तारीख शोधणे
+    # शेवटच्या ट्रेडिंग दिवसाचा डेटा निवडणे
     latest_trading_date = df.index[-1].date()
-    
-    # फक्त त्या संपूर्ण दिवसाचा डेटा फिल्टर करणे (सकाळपासून दुपारपर्यंतच्या सर्व कॅण्डल्स)
     full_day_df = df[df.index.date == latest_trading_date]
 
     detected_records = []
@@ -93,7 +89,7 @@ def scan_full_day_touches(ticker, interval):
             
     return detected_records, full_day_df
 
-# ३. स्कॅनर चालवणे
+# ४. स्कॅनर चालवणे
 if st.sidebar.button("पूर्ण दिवसाचे निकाल स्कॅन करा (Scan Full Day)"):
     st.subheader(f"दिवसभरातील सर्व स्पर्श निकाल ({selected_tf_label})")
     all_results = []
@@ -112,13 +108,12 @@ if st.sidebar.button("पूर्ण दिवसाचे निकाल स�
         res_df = pd.DataFrame(all_results)
         cols = ["तारीख", "वेळ (IST)", "इंडेक्स", "किंमत (LTP)", "कॅण्डल Low", "कॅण्डल High", "स्पर्श झालेला EMA"]
         res_df = res_df[cols]
-        # वेळेनुसार सॉर्ट करणे (सकाळपासून दुपारपर्यंत)
         res_df = res_df.sort_values(by="वेळ (IST)", ascending=True)
         st.dataframe(res_df, use_container_width=True)
     else:
         st.warning("दिवसभरात कोणत्याही कॅण्डलने EMA ला स्पर्श केलेला नाही.")
 
-# ४. चार्ट विभाग (दिवसभरातील कॅण्डल्स)
+# ५. चार्ट विभाग
 st.markdown("---")
 st.subheader("आजच्या संपूर्ण दिवसाचा चार्ट")
 chart_symbol_name = st.selectbox("इंडेक्स निवडा:", list(watch_list.keys()))
