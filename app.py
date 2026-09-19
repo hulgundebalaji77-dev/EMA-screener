@@ -6,9 +6,9 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="NSE/BSE Indices EMA Screener", layout="wide")
 
 st.title("📊 NSE & BSE Indices - EMA Touch Scanner")
-st.write("फक्त ज्या इंडेक्सच्या चालू कॅण्डलने 9, 21, 50, किंवा 200 EMA ला *अचूक स्पर्श (Touch)* केला आहे त्यांचेच अलर्ट.")
+st.write("इंडायसेसचे 9, 21, 50, आणि 200 EMA टच स्कॅनर (मागील कॅण्डल्सच्या नोंदींसह).")
 
-# १. साइडबार - टाइमफ्रेम निवडा
+# १. साइडबार सेटिंग्ज
 st.sidebar.header("सेटिंग्ज")
 timeframe_map = {
     "1 Minute": "1m",
@@ -18,7 +18,9 @@ timeframe_map = {
 selected_tf_label = st.sidebar.selectbox("टाइमफ्रेम निवडा:", list(timeframe_map.keys()), index=1)
 selected_interval = timeframe_map[selected_tf_label]
 
-# २. इंडेक्सची यादी
+# मागील किती कॅण्डल्स तपासायच्या यासाठी स्लाइडर
+lookback_bars = st.sidebar.slider("मागील किती कॅण्डल्स तपासायच्या:", min_value=1, max_value=20, value=5)
+
 watch_list = {
     "NIFTY 50": "^NSEI",
     "SENSEX": "^BSESN",
@@ -30,18 +32,18 @@ watch_list = {
     "NIFTY AUTO": "^CNXAUTO"
 }
 
-# ३. डेटा फेचिंग आणि EMA टच पडताळणी
-def check_ema_touch(ticker, interval):
+# २. डेटा फेचिंग आणि EMA टच तपासणे
+def check_ema_touch(ticker, interval, lookback):
     period = "5d" if interval == "1m" else "1mo"
     df = yf.download(ticker, period=period, interval=interval, progress=False)
     
     if df.empty or len(df) < 200:
-        return None, None
+        return [], None
     
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # टाइमझोन IST मध्ये बदलणे
+    # टाइमझोन भारतीय प्रमाणवेळेत (IST) करणे
     if df.index.tz is not None:
         df.index = df.index.tz_convert("Asia/Kolkata")
     else:
@@ -52,72 +54,75 @@ def check_ema_touch(ticker, interval):
     df["EMA_21"] = df["Close"].ewm(span=21, adjust=False).mean()
     df["EMA_50"] = df["Close"].ewm(span=50, adjust=False).mean()
     df["EMA_200"] = df["Close"].ewm(span=200, adjust=False).mean()
-    
-    latest = df.iloc[-1]
-    low_price = float(latest["Low"])
-    high_price = float(latest["High"])
-    
-    touched_emas = []
-    
-    # 9, 21, 50, 200 EMA तपासणे
-    ema_dict = {
-        "EMA 9": latest["EMA_9"],
-        "EMA 21": latest["EMA_21"],
-        "EMA 50": latest["EMA_50"],
-        "EMA 200": latest["EMA_200"]
-    }
 
-    for name, val in ema_dict.items():
-        if pd.notna(val):
-            ema_val = float(val)
+    detected_records = []
+    
+    # शेवटच्या N कॅण्डल्स तपासणे
+    target_slice = df.tail(lookback)
+    
+    for idx, row in target_slice.iterrows():
+        low_p = float(row["Low"])
+        high_p = float(row["High"])
+        close_p = float(row["Close"])
+        
+        emas = {
+            "EMA 9": row["EMA_9"],
+            "EMA 21": row["EMA_21"],
+            "EMA 50": row["EMA_50"],
+            "EMA 200": row["EMA_200"]
+        }
+        
+        touched = []
+        for name, val in emas.items():
+            if pd.notna(val):
+                val_float = float(val)
+                # अचूक टच: कॅण्डलचा Low <= EMA <= High
+                if low_p <= val_float <= high_p:
+                    touched.append(f"{name} ({round(val_float, 2)})")
+        
+        if touched:
+            detected_records.append({
+                "तारीख": idx.strftime("%d-%m-%Y"),
+                "वेळ (IST)": idx.strftime("%H:%M:%S"),
+                "चालू किंमत": round(close_p, 2),
+                "कॅण्डल Low": round(low_p, 2),
+                "कॅण्डल High": round(high_p, 2),
+                "टच झालेला EMA": ", ".join(touched)
+            })
             
-            # अचूक टच कंडिशन:
-            # १) कॅण्डलचा Low हा EMA पेक्षा लहान किंवा बरोबर असावा (Low <= EMA)
-            # २) कॅण्डलचा High हा EMA पेक्षा मोठा किंवा बरोबर असावा (High >= EMA)
-            # याने किंमतीने रेषेला प्रत्यक्ष छेदले किंवा स्पर्श केले तरच सिग्नल येतो.
-            if low_price <= ema_val <= high_price:
-                touched_emas.append(f"{name} ({round(ema_val, 2)})")
-                
-    return touched_emas, df
+    return detected_records, df
 
-# ४. स्कॅनर रन करणे
+# ३. स्कॅन करणे
 if st.sidebar.button("इंडायसेस स्कॅन करा (Scan Indices)"):
-    st.subheader(f"स्कॅन निकाल ({selected_tf_label})")
-    results = []
+    st.subheader(f"स्कॅन निकाल ({selected_tf_label}) - शेवटच्या {lookback_bars} कॅण्डल्समधील स्पर्श")
+    all_results = []
 
     progress_bar = st.progress(0)
     total_items = len(watch_list)
 
     for i, (name, symbol) in enumerate(watch_list.items()):
-        touched, df = check_ema_touch(symbol, selected_interval)
-        if touched:
-            latest_bar = df.iloc[-1]
-            signal_timestamp = df.index[-1]
-            
-            results.append({
-                "तारीख (Date)": signal_timestamp.strftime("%d-%m-%Y"),
-                "वेळ (Time IST)": signal_timestamp.strftime("%H:%M:%S"),
-                "इंडेक्स (Index)": name,
-                "चालू किंमत (LTP)": round(float(latest_bar["Close"]), 2),
-                "कॅण्डल Low": round(float(latest_bar["Low"]), 2),
-                "कॅण्डल High": round(float(latest_bar["High"]), 2),
-                "स्पर्श झालेला EMA (Touch)": ", ".join(touched)
-            })
+        touches, df = check_ema_touch(symbol, selected_interval, lookback_bars)
+        for t in touches:
+            t["इंडेक्स"] = name
+            all_results.append(t)
         progress_bar.progress((i + 1) / total_items)
 
-    if results:
-        res_df = pd.DataFrame(results)
+    if all_results:
+        res_df = pd.DataFrame(all_results)
+        # कॉलम्सचा क्रम
+        cols = ["तारीख", "वेळ (IST)", "इंडेक्स", "चालू किंमत", "कॅण्डल Low", "कॅण्डल High", "टच झालेला EMA"]
+        res_df = res_df[cols]
         st.dataframe(res_df, use_container_width=True)
     else:
-        st.warning("सध्या कोणत्याही इंडेक्सच्या चालू कॅण्डलने EMA ला स्पर्श केलेला नाही.")
+        st.warning("निवडलेल्या मागील कॅण्डल्समध्ये कोणत्याही इंडेक्सने EMA ला स्पर्श केलेला नाही.")
 
-# ५. इंडेक्स चार्ट विभाग
+# ४. चार्ट विभाग
 st.markdown("---")
 st.subheader("इंडेक्स कॅण्डलस्टिक आणि EMA चार्ट")
 chart_symbol_name = st.selectbox("चार्ट पाहण्यासाठी इंडेक्स निवडा:", list(watch_list.keys()))
 
 if chart_symbol_name:
-    _, chart_df = check_ema_touch(watch_list[chart_symbol_name], selected_interval)
+    _, chart_df = check_ema_touch(watch_list[chart_symbol_name], selected_interval, lookback_bars)
     if chart_df is not None and not chart_df.empty:
         plot_df = chart_df.tail(100)
         
@@ -126,7 +131,7 @@ if chart_symbol_name:
             x=plot_df.index,
             open=plot_df['Open'], high=plot_df['High'],
             low=plot_df['Low'], close=plot_df['Close'],
-            name="इंडेक्स किंमत"
+            name="इंडेक्स दर"
         ))
         
         fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['EMA_9'], line=dict(color='blue', width=1.5), name='EMA 9'))
