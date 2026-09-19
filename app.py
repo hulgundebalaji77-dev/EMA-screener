@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="NSE/BSE Indices EMA Screener", layout="wide")
 
 st.title("📊 NSE & BSE Indices - EMA Touch Scanner")
-st.write("इंडायसेसचे 9, 21, 50, आणि 200 EMA टच स्कॅनर (सिग्नल तारीख आणि वेळेसह).")
+st.write("फक्त ज्या इंडेक्सच्या चालू कॅण्डलने 9, 21, 50, किंवा 200 EMA ला *अचूक स्पर्श (Touch)* केला आहे त्यांचेच अलर्ट.")
 
 # १. साइडबार - टाइमफ्रेम निवडा
 st.sidebar.header("सेटिंग्ज")
@@ -30,7 +30,7 @@ watch_list = {
     "NIFTY AUTO": "^CNXAUTO"
 }
 
-# ३. डेटा फेचिंग आणि EMA कॅल्क्युलेशन
+# ३. डेटा फेचिंग आणि EMA टच पडताळणी
 def check_ema_touch(ticker, interval):
     period = "5d" if interval == "1m" else "1mo"
     df = yf.download(ticker, period=period, interval=interval, progress=False)
@@ -38,11 +38,10 @@ def check_ema_touch(ticker, interval):
     if df.empty or len(df) < 200:
         return None, None
     
-    # मल्टि-इंडेक्स कॉलम्स सपाट करणे
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # टाइमझोन भारतीय प्रमाणवेळेत (IST) रूपांतरित करणे
+    # टाइमझोन IST मध्ये बदलणे
     if df.index.tz is not None:
         df.index = df.index.tz_convert("Asia/Kolkata")
     else:
@@ -59,13 +58,25 @@ def check_ema_touch(ticker, interval):
     high_price = float(latest["High"])
     
     touched_emas = []
-    for ema_val, name in [(latest["EMA_9"], "EMA 9"), 
-                          (latest["EMA_21"], "EMA 21"), 
-                          (latest["EMA_50"], "EMA 50"), 
-                          (latest["EMA_200"], "EMA 200")]:
-        if pd.notna(ema_val):
-            if low_price <= float(ema_val) <= high_price:
-                touched_emas.append(name)
+    
+    # 9, 21, 50, 200 EMA तपासणे
+    ema_dict = {
+        "EMA 9": latest["EMA_9"],
+        "EMA 21": latest["EMA_21"],
+        "EMA 50": latest["EMA_50"],
+        "EMA 200": latest["EMA_200"]
+    }
+
+    for name, val in ema_dict.items():
+        if pd.notna(val):
+            ema_val = float(val)
+            
+            # अचूक टच कंडिशन:
+            # १) कॅण्डलचा Low हा EMA पेक्षा लहान किंवा बरोबर असावा (Low <= EMA)
+            # २) कॅण्डलचा High हा EMA पेक्षा मोठा किंवा बरोबर असावा (High >= EMA)
+            # याने किंमतीने रेषेला प्रत्यक्ष छेदले किंवा स्पर्श केले तरच सिग्नल येतो.
+            if low_price <= ema_val <= high_price:
+                touched_emas.append(f"{name} ({round(ema_val, 2)})")
                 
     return touched_emas, df
 
@@ -87,10 +98,10 @@ if st.sidebar.button("इंडायसेस स्कॅन करा (Scan I
                 "तारीख (Date)": signal_timestamp.strftime("%d-%m-%Y"),
                 "वेळ (Time IST)": signal_timestamp.strftime("%H:%M:%S"),
                 "इंडेक्स (Index)": name,
-                "किंमत (LTP)": round(float(latest_bar["Close"]), 2),
+                "चालू किंमत (LTP)": round(float(latest_bar["Close"]), 2),
                 "कॅण्डल Low": round(float(latest_bar["Low"]), 2),
                 "कॅण्डल High": round(float(latest_bar["High"]), 2),
-                "टच झालेला EMA": ", ".join(touched)
+                "स्पर्श झालेला EMA (Touch)": ", ".join(touched)
             })
         progress_bar.progress((i + 1) / total_items)
 
@@ -98,7 +109,7 @@ if st.sidebar.button("इंडायसेस स्कॅन करा (Scan I
         res_df = pd.DataFrame(results)
         st.dataframe(res_df, use_container_width=True)
     else:
-        st.info("सध्या कोणत्याही इंडेक्सच्या चालू कॅण्डलने निवडलेल्या EMA ला स्पर्श केलेला नाही.")
+        st.warning("सध्या कोणत्याही इंडेक्सच्या चालू कॅण्डलने EMA ला स्पर्श केलेला नाही.")
 
 # ५. इंडेक्स चार्ट विभाग
 st.markdown("---")
